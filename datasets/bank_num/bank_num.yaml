@@ -1,0 +1,4 @@
+train: D:/PycharmProjects/2026-BankCardScan/datasets/bank_num/train/images
+val: D:/PycharmProjects/2026-BankCardScan/datasets/bank_num/val/images
+nc: 1
+names: ['bank_num']
