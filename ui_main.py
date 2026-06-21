@@ -2,6 +2,7 @@ import warnings
 
 from PIL.FitsImagePlugin import FitsGzipDecoder
 
+warnings.filterwarnings("ignore")
 import sys
 import os
 import time
@@ -20,22 +21,23 @@ from PIL import Image, ImageDraw, ImageFont
 
 from yoloQt import Ui_MainWindow
 
-warnings.filterwarnings("ignore")
+
 
 def convert2QImage(img):
     height, width, channel = img.shape
     return QImage(img, width, height, width * channel, QImage.Format_RGB888)
 
-# 图形界面按钮的方法绑定
+
+#图形界面按钮的方法绑定
 class MainWindow(QMainWindow, Ui_MainWindow):
     def __init__(self, parent=None):
         super(MainWindow, self).__init__(parent)
         self.setupUi(self)  # 加载pyside6的UI
         self.timer = QTimer()   # 加载定时器
-        self.timer.setInterval(100)  # 设置定时器触发时间
+        self.timer.setInterval(2000)  # 设置定时器触发时间
         self.video = None
         self.is_running = False
-        self.weights_path = 'D:/PycharmProjects/2026-BankCardScan/runs/train/exp2/weights/best.pt'
+        self.weights_path = 'runs/train/exp/weights/best.pt'
         try:
             self.model = YOLO(self.weights_path)
             self.model(np.zeros((800, 800, 3)).astype(np.uint8))  #预先加载推理模型
@@ -45,12 +47,16 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.conf = self.doubleSpinBox_conf.value() if hasattr(self, 'doubleSpinBox_conf') else 0.5
         self.iou = self.doubleSpinBox_iou.value() if hasattr(self, 'doubleSpinBox_iou') else 0.7
         self.bind_slots()   # 事件绑定
-        self.ocr = PaddleOCR(use_angle_cls=True, lang='ch')
+        self.ocr = PaddleOCR(use_angle_cls=True, lang='en')
+        # 视频/摄像头模式下的卡号稳定显示缓存
+        self.ocr_text_cache = {}  # {track_id: {'text': str, 'count': int, 'last_box': tuple}}
+        self.ocr_cache_threshold = 3  # 连续3帧相同才确认显示
+        self.ocr_track_id = 0
 
     def bind_slots(self):
         self.Button_checkImg.clicked.connect(self.select_images)  # 检测图片
-        # self.Button_openCamera.clicked.connect(self.open_camera)  # 检测摄像头
-        # self.Button_checkVideo.clicked.connect(self.select_video)  # 检测视频
+        self.Button_openCamera.clicked.connect(self.open_camera)  # 检测摄像头
+        self.Button_checkVideo.clicked.connect(self.select_video)  # 检测视频
         # self.Button_select_folder.clicked.connect(self.select_folder)  # 检测文件夹
         self.Button_select_w_p.clicked.connect(self.select_weights)  # 选择权重
         self.pushButton_bofang.clicked.connect(self.run_stop)  # 播放暂停
@@ -108,6 +114,37 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             end_time = time.time()
             img_bgr = results[0].plot()
             num = len(results[0].boxes)
+
+            # ========== OCR 银行卡卡号识别 ==========
+            img_src = frame.copy()
+            img_pil = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
+            draw = ImageDraw.Draw(img_pil)
+
+            for box in results[0].boxes.xyxy.cpu().numpy():
+                x1, y1, x2, y2 = map(int, box)
+                crop = img_src[max(0, y1):min(img_src.shape[0], y2),
+                               max(0, x1 - 10):min(img_src.shape[1], x2 + 10)]
+
+                if crop.size == 0:
+                    continue
+
+                ocr_result = self.ocr.ocr(crop, cls=True)
+                if ocr_result and ocr_result[0]:
+                    text = re.sub(r'[^0-9]', '', ''.join(
+                        [line[1][0] for line in ocr_result[0]]))
+
+                    if text:
+                        box_height = y2 - y1
+                        font_size = int(box_height * 0.6)
+                        font_size = max(font_size, 12)
+                        font = ImageFont.truetype("simhei.ttf", font_size)
+                        y_text = y2 + int(box_height * 0.2) if y2 + int(box_height * 0.2) < img_bgr.shape[
+                            0] else y2 - font_size
+                        draw.text((x1, y_text), text, font=font, fill=(255, 0, 0))
+
+            img_bgr = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+            # ========== OCR 结束 ==========
+
             if hasattr(self, 'label_nums'):
                 self.label_nums.setText(str(num))
             if hasattr(self, 'label_times'):
@@ -204,7 +241,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 if crop.size == 0:
                     continue
 
-                crop = self.preprocess_for_ocr(crop)
+                # crop = self.preprocess_for_ocr(crop)
 
                 ocr_result = self.ocr.ocr(crop, cls=True)
                 if ocr_result and len(ocr_result[0]) > 0:
